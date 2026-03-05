@@ -162,6 +162,7 @@ func diffUsers(wanted map[string]struct{}, existing map[string]struct{}) (toCrea
 	return
 }
 
+// execOnDB executes a function on a given RDS database.
 func (c *client) execOnDB(ctx context.Context, db config.RDSDatabaseConfig, fn func(*sql.DB) error) error {
 	region := db.Region
 	if region == "" {
