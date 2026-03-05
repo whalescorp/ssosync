@@ -5,20 +5,23 @@ go 1.24
 require (
 	github.com/BurntSushi/toml v1.5.0
 	github.com/aws/aws-lambda-go v1.49.0
-	github.com/aws/aws-sdk-go-v2 v1.38.0
+	github.com/aws/aws-sdk-go-v2 v1.41.2
 	github.com/aws/aws-sdk-go-v2/config v1.30.3
+	github.com/aws/aws-sdk-go-v2/feature/rds/auth v1.6.18
 	github.com/aws/aws-sdk-go-v2/service/codepipeline v1.44.0
 	github.com/aws/aws-sdk-go-v2/service/identitystore v1.30.0
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.37.0
 	github.com/aws/aws-secretsmanager-caching-go/v2 v2.1.1
 	github.com/golang/mock v1.6.0
 	github.com/hashicorp/go-retryablehttp v0.7.8
+	github.com/lib/pq v1.11.2
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/cobra v1.9.1
 	github.com/spf13/viper v1.20.1
 	github.com/stretchr/testify v1.10.0
 	golang.org/x/oauth2 v0.30.0
+	golang.org/x/sync v0.16.0
 	google.golang.org/api v0.246.0
 )
 
@@ -36,7 +39,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.27.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.32.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.36.0 // indirect
-	github.com/aws/smithy-go v1.22.5 // indirect
+	github.com/aws/smithy-go v1.24.1 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect

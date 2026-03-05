@@ -24,6 +24,7 @@ import (
 
 	"github.com/awslabs/ssosync/internal/aws"
 	"github.com/awslabs/ssosync/internal/aws/identitystore"
+	"github.com/awslabs/ssosync/internal/aws/rds"
 	"github.com/awslabs/ssosync/internal/config"
 	"github.com/awslabs/ssosync/internal/constants"
 	"github.com/awslabs/ssosync/internal/google"
@@ -51,6 +52,7 @@ type syncGSuite struct {
 	google        google.Client
 	cfg           *config.Config
 	identityStore interfaces.IdentityStoreAPI
+	rds           rds.Client
 
 	users            map[string]*interfaces.User
 	ignoreUsersSet   map[string]struct{}
@@ -59,14 +61,32 @@ type syncGSuite struct {
 }
 
 // New will create a new SyncGSuite object
-func New(cfg *config.Config, a aws.Client, g google.Client, ids interfaces.IdentityStoreAPI) SyncGSuite {
+func New(cfg *config.Config, a aws.Client, g google.Client, ids interfaces.IdentityStoreAPI, rdsClient rds.Client) SyncGSuite {
 	return &syncGSuite{
 		aws:           a,
 		google:        g,
 		cfg:           cfg,
 		identityStore: ids,
+		rds:           rdsClient,
 		users:         make(map[string]*interfaces.User),
 	}
+}
+
+// syncRDSUsers collects wanted emails from the filtered Google users and
+// delegates per-database diff to rds.Client.SyncUsers.
+func (s *syncGSuite) syncRDSUsers(ctx context.Context, googleUsers []*admin.User) error {
+	if s.rds == nil {
+		return nil
+	}
+	emails := make([]string, 0, len(googleUsers))
+	for _, u := range googleUsers {
+		if s.ignoreUser(u.PrimaryEmail) {
+			continue
+		}
+		emails = append(emails, u.PrimaryEmail)
+	}
+	log.WithField("target_count", len(emails)).Info("syncing RDS users")
+	return s.rds.SyncUsers(ctx, emails)
 }
 
 // SyncUsers will Sync Google Users to AWS SSO SCIM
@@ -169,6 +189,10 @@ func (s *syncGSuite) SyncUsers(query string) error {
 		}
 
 		s.users[uu.Username] = uu
+	}
+
+	if err := s.syncRDSUsers(ctx, googleUsers); err != nil {
+		return err
 	}
 
 	return nil
@@ -544,6 +568,10 @@ func (s *syncGSuite) SyncGroupsUsers(queryGroups string, queryUsers string) erro
 			log.WithField("user", awsUser).Error("error deleting user")
 			return err
 		}
+	}
+
+	if err := s.syncRDSUsers(context.Background(), googleUsers); err != nil {
+		return err
 	}
 
 	log.Info("sync completed")
@@ -1047,11 +1075,38 @@ func DoSync(ctx context.Context, cfg *config.Config) error {
 	}
 	log.WithField("Groups", response).Info("Test call for groups successful")
 
+	// Initialize RDS client if databases are configured
+	var rdsClient rds.Client
+	rdsDatabases, err := cfg.GetRdsDatabases()
+	if err != nil {
+		return err
+	}
+	if len(rdsDatabases) > 0 {
+		if cfg.DryRun {
+			rdsClient = rds.NewDryClient()
+		} else {
+			var rdsLoadOpts []func(*aws_config.LoadOptions) error
+			if cfg.AWSProfile != "" {
+				log.WithField("profile", cfg.AWSProfile).Info("using named AWS profile for RDS")
+				rdsLoadOpts = append(rdsLoadOpts, aws_config.WithSharedConfigProfile(cfg.AWSProfile))
+			}
+			rdsCfg, rdsErr := aws_config.LoadDefaultConfig(context.Background(), rdsLoadOpts...)
+			if rdsErr != nil {
+				return rdsErr
+			}
+			rdsClient = rds.NewClient(rdsCfg, rdsDatabases, cfg.IAMDBName)
+		}
+		log.WithField("databases", len(rdsDatabases)).Info("RDS user provisioning enabled")
+	} else {
+		log.Info("RDS user provisioning disabled")
+	}
+
 	// Initialize sync client with
 	// 1. SCIM API client
 	// 2. Google Directory API client
 	// 3. Identity Store Public API client
-	c := New(cfg, awsScimClient, googleClient, finalIdentityStoreClient)
+	// 4. RDS client (nil when no databases configured)
+	c := New(cfg, awsScimClient, googleClient, finalIdentityStoreClient, rdsClient)
 
 	log.WithField("sync_method", cfg.SyncMethod).Info("syncing")
 	if cfg.SyncMethod == config.DefaultSyncMethod {
