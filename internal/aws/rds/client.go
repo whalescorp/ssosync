@@ -72,7 +72,11 @@ func (c *client) SyncUsers(ctx context.Context, wantedEmails []string) error {
 			if err != nil {
 				return fmt.Errorf("begin transaction: %w", err)
 			}
-			defer tx.Rollback()
+			defer func() {
+				if err := tx.Rollback(); err != nil {
+					ll.WithError(err).Error("failed to rollback transaction")
+				}
+			}()
 
 			for _, email := range toCreate {
 				ul := ll.WithField("email", email)
@@ -134,7 +138,11 @@ func getManagedUsers(ctx context.Context, conn *sql.DB) (map[string]struct{}, er
 	if err != nil {
 		return nil, fmt.Errorf("query managed users: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		if err := rows.Close(); err != nil {
+			log.WithError(err).Error("failed to close rows")
+		}
+	}()
 
 	result := make(map[string]struct{})
 	for rows.Next() {
@@ -194,7 +202,11 @@ func (c *client) execOnDB(ctx context.Context, db config.RDSDatabaseConfig, fn f
 	if err != nil {
 		return fmt.Errorf("connect to %s/%s: %w", db.Endpoint, db.DBName, err)
 	}
-	defer conn.Close()
+	defer func() {
+		if err := conn.Close(); err != nil {
+			log.WithError(err).Error("failed to close connection")
+		}
+	}()
 
 	if err := conn.PingContext(ctx); err != nil {
 		return fmt.Errorf("ping %s/%s: %w", db.Endpoint, db.DBName, err)
