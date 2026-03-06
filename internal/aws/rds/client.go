@@ -73,7 +73,7 @@ func (c *client) SyncUsers(ctx context.Context, wantedEmails []string) error {
 				return fmt.Errorf("begin transaction: %w", err)
 			}
 			defer func() {
-				if err := tx.Rollback(); err != nil {
+				if err := tx.Rollback(); err != nil && err != sql.ErrTxDone {
 					ll.WithError(err).Error("failed to rollback transaction")
 				}
 			}()
@@ -91,6 +91,9 @@ func (c *client) SyncUsers(ctx context.Context, wantedEmails []string) error {
 				if _, err := tx.ExecContext(ctx, "COMMENT ON ROLE "+quoted+" IS '"+managedByComment+"'"); err != nil {
 					return fmt.Errorf("COMMENT ON ROLE %q: %w", email, err)
 				}
+				if _, err := tx.ExecContext(ctx, "GRANT USAGE ON SCHEMA public TO "+quoted); err != nil {
+					return fmt.Errorf("GRANT USAGE ON SCHEMA public TO %q: %w", email, err)
+				}
 				if _, err := tx.ExecContext(ctx, "ALTER DEFAULT PRIVILEGES FOR ROLE "+owner+" IN SCHEMA public GRANT SELECT ON TABLES TO "+quoted); err != nil {
 					return fmt.Errorf("ALTER DEFAULT PRIVILEGES FOR ROLE %q IN SCHEMA public GRANT SELECT ON TABLES TO %q: %w", owner, email, err)
 				}
@@ -105,6 +108,9 @@ func (c *client) SyncUsers(ctx context.Context, wantedEmails []string) error {
 				quoted := pq.QuoteIdentifier(email)
 				if _, err := tx.ExecContext(ctx, "REASSIGN OWNED BY "+quoted+" TO "+owner); err != nil {
 					return fmt.Errorf("REASSIGN OWNED BY %q TO %q: %w", email, owner, err)
+				}
+				if _, err := tx.ExecContext(ctx, "ALTER DEFAULT PRIVILEGES FOR ROLE "+owner+" IN SCHEMA public REVOKE ALL ON TABLES FROM "+quoted); err != nil {
+					return fmt.Errorf("ALTER DEFAULT PRIVILEGES FOR ROLE %q IN SCHEMA public REVOKE ALL ON TABLES FROM %q: %w", owner, email, err)
 				}
 				if _, err := tx.ExecContext(ctx, "DROP USER IF EXISTS "+quoted); err != nil {
 					return fmt.Errorf("DROP USER %q: %w", email, err)
