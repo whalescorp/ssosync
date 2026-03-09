@@ -303,7 +303,7 @@ func addFlags(_ *cobra.Command, cfg *config.Config) {
 	rootCmd.Flags().StringVarP(&cfg.IdentityStoreID, "identity-store-id", "i", "", "Identifier of Identity Store in AWS SSO")
 	rootCmd.Flags().StringSliceVar(&cfg.PrecacheOrgUnits, "precache-ous", strings.Split(config.DefaultPrecacheOrgUnits, ","), "A common separated list of Google Workspace OrgUnitPathis e.g.'/', to precache all users within the organization or '/OU_1/OU 2,/OU3'. To disable and use caching on the fly, 'DISABLED'.")
 	rootCmd.Flags().StringVar(&cfg.AWSProfile, "aws-profile", "", "named AWS profile from ~/.aws/config to use (useful for local debugging)")
-	rootCmd.Flags().StringVar(&cfg.RDSDatabasesJSON, "rds-databases", "", `JSON array of RDS databases to provision users in, e.g. '[{"engine":"postgres","endpoint":"mydb.xxx.rds.amazonaws.com","port":5432,"dbname":"mydb","service_user":"lambda_svc","default_owner":"app_owner"}]'`)
+	rootCmd.Flags().StringVar(&cfg.RDSDatabasesJSON, "rds-databases", "", `JSON array of RDS databases to provision users in, e.g. '[{"engine":"postgres","endpoint":"mydb.xxx.rds.amazonaws.com","port":5432,"dbs":[{"name":"mydb1","default_owner":"app_owner"},{"name":"mydb2","default_owner":"app_owner"}],"service_user":"lambda_svc"}]'`)
 	rootCmd.Flags().StringVar(&cfg.IAMDBName, "iam-db-name", "", "database name is being used for IAM authentication into rds")
 
 }

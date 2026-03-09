@@ -7,6 +7,14 @@ import (
 	"fmt"
 )
 
+type DBRecord struct {
+	// Name is the name of the database
+	Name string `json:"name"`
+	// DefaultOwner is the role that receives ownership of objects
+	// when a user is deleted. Typically the database/schema owner role.
+	DefaultOwner string `json:"default_owner"`
+}
+
 // RDSDatabaseConfig describes a single RDS database instance where
 // users should be provisioned alongside Identity Store.
 type RDSDatabaseConfig struct {
@@ -15,18 +23,14 @@ type RDSDatabaseConfig struct {
 	// Endpoint is the RDS instance hostname, e.g. "mydb.abc123.us-east-1.rds.amazonaws.com"
 	Endpoint string `json:"endpoint"`
 	// Port, e.g. 5432
-	Port int `json:"port"`
-	// DBName is the database to connect to
-	DBName string `json:"dbname"`
+	Port int        `json:"port"`
+	DBs  []DBRecord `json:"dbs"`
 	// Region overrides the global Region for IAM auth token generation.
 	// If empty, the global cfg.Region is used.
 	Region string `json:"region,omitempty"`
 	// ServiceUser is the database role mapped to the IAM principal
 	// that the Lambda (or local caller) assumes.
 	ServiceUser string `json:"service_user"`
-	// DefaultOwner is the role that receives ownership of objects
-	// when a user is deleted. Typically the database/schema owner role.
-	DefaultOwner string `json:"default_owner"`
 }
 
 // Config ...
@@ -179,14 +183,11 @@ func (c *Config) Validate() error {
 		if db.Port == 0 {
 			return fmt.Errorf("rds_databases[%d]: port is required", i)
 		}
-		if db.DBName == "" {
-			return fmt.Errorf("rds_databases[%d]: dbname is required", i)
+		if len(db.DBs) == 0 {
+			return fmt.Errorf("rds_databases[%d]: dbnames array is required", i)
 		}
 		if db.ServiceUser == "" {
 			return fmt.Errorf("rds_databases[%d]: service_user is required", i)
-		}
-		if db.DefaultOwner == "" {
-			return fmt.Errorf("rds_databases[%d]: default_owner is required", i)
 		}
 	}
 
