@@ -132,6 +132,7 @@ func (c *client) SyncUsers(ctx context.Context, wantedEmails []string) error {
 
 		for _, db := range dbInstance.DBs {
 			owner := pq.QuoteIdentifier(db.DefaultOwner)
+			// FIXME: revoke privileges when database is being removed from the list of databases
 			if err := c.execOnDB(ctx, dbInstance, db.Name, func(conn *sql.DB) error {
 				tx, err := conn.BeginTx(ctx, nil)
 				if err != nil {
