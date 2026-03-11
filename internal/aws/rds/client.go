@@ -188,6 +188,15 @@ func (c *client) SyncUsers(ctx context.Context, wantedEmails []string) error {
 						ll.WithError(err).Error("failed to rollback transaction for revoke ssosync readers role")
 					}
 				}()
+				managedUsers, err := getManagedUsers(ctx, tx)
+				if err != nil {
+					return fmt.Errorf("get managed users for delete: %w", err)
+				}
+				for user := range managedUsers {
+					if _, err := tx.ExecContext(ctx, "DROP USER IF EXISTS "+pq.QuoteIdentifier(user)); err != nil {
+						return fmt.Errorf("DROP USER IF EXISTS %q: %w", user, err)
+					}
+				}
 				if _, err := tx.ExecContext(ctx, "REVOKE USAGE ON SCHEMA public FROM "+ssosyncReadersRole); err != nil {
 					return fmt.Errorf("REVOKE USAGE ON SCHEMA public FROM %q: %w", ssosyncReadersRole, err)
 				}
@@ -201,6 +210,9 @@ func (c *client) SyncUsers(ctx context.Context, wantedEmails []string) error {
 				nameQuoted := pq.QuoteIdentifier(name)
 				if _, err := tx.ExecContext(ctx, "COMMENT ON DATABASE "+nameQuoted+" IS NULL"); err != nil {
 					return fmt.Errorf("COMMENT ON DATABASE %q IS NULL: %w", nameQuoted, err)
+				}
+				if _, err := tx.ExecContext(ctx, "DROP USER IF EXISTS "+pq.QuoteIdentifier(ssosyncReadersRole)); err != nil {
+					return fmt.Errorf("DROP USER IF EXISTS %q: %w", ssosyncReadersRole, err)
 				}
 				return tx.Commit()
 			}); err != nil {
