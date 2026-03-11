@@ -220,7 +220,7 @@ func getManagedDatabases(ctx context.Context, conn *sql.Tx) (map[string]string, 
 		SELECT d.datname, sd.description
 		FROM pg_database AS d
 		JOIN pg_shdescription AS sd ON sd.objoid = d.oid
-		WHERE sd.classoid = 'pg_database'::regclass AND sd.description LIKE '`+managedByComment+`%;owner:%'`)
+		WHERE sd.classoid = 'pg_database'::regclass AND sd.description LIKE '`+managedByComment+`;owner:%'`)
 	if err != nil {
 		return nil, fmt.Errorf("query managed databases: %w", err)
 	}
