@@ -184,7 +184,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("rds_databases[%d]: port is required", i)
 		}
 		if len(db.DBs) == 0 {
-			return fmt.Errorf("rds_databases[%d]: dbnames array is required", i)
+			return fmt.Errorf("rds_databases[%d]: dbs array is required", i)
 		}
 		if db.ServiceUser == "" {
 			return fmt.Errorf("rds_databases[%d]: service_user is required", i)

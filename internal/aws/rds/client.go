@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/rds/auth"
@@ -59,6 +61,8 @@ func (c *client) SyncUsers(ctx context.Context, wantedEmails []string) error {
 		})
 		ll.Info("syncing RDS users")
 
+		existingDatabases := make(map[string]string)
+
 		if err := c.execOnDB(ctx, dbInstance, dbInstance.DBs[0].Name, func(conn *sql.DB) error {
 			tx, err := conn.BeginTx(ctx, nil)
 			if err != nil {
@@ -69,6 +73,13 @@ func (c *client) SyncUsers(ctx context.Context, wantedEmails []string) error {
 					ll.WithError(err).Error("failed to rollback transaction for creating service and regular users")
 				}
 			}()
+
+			for _, db := range dbInstance.DBs {
+				name := pq.QuoteIdentifier(db.Name)
+				if _, err := tx.ExecContext(ctx, "COMMENT ON DATABASE "+name+" IS 'managed-by:ssosync;owner:"+db.DefaultOwner+"'"); err != nil {
+					return fmt.Errorf("COMMENT ON DATABASE %q IS 'managed-by:ssosync;owner:%q': %w", name, db.DefaultOwner, err)
+				}
+			}
 
 			createServiceUsertTx := `
 				DO $$
@@ -86,7 +97,12 @@ func (c *client) SyncUsers(ctx context.Context, wantedEmails []string) error {
 
 			existing, err := getManagedUsers(ctx, tx)
 			if err != nil {
-				return err
+				return fmt.Errorf("get managed users: %w", err)
+			}
+
+			existingDatabases, err = getManagedDatabases(ctx, tx)
+			if err != nil {
+				return fmt.Errorf("get managed databases: %w", err)
 			}
 
 			toCreate, toDelete := diffUsers(wantedSet, existing)
@@ -105,9 +121,6 @@ func (c *client) SyncUsers(ctx context.Context, wantedEmails []string) error {
 				if _, err := tx.ExecContext(ctx, "CREATE USER "+quoted+" WITH LOGIN IN GROUP "+ssosyncReadersRole+", rds_iam"); err != nil {
 					return fmt.Errorf("CREATE USER %q: %w", email, err)
 				}
-				// if _, err := tx.ExecContext(ctx, "GRANT rds_iam TO "+quoted); err != nil {
-				// 	return fmt.Errorf("GRANT rds_iam TO %q: %w", email, err)
-				// }
 				if _, err := tx.ExecContext(ctx, "COMMENT ON ROLE "+quoted+" IS '"+managedByComment+"'"); err != nil {
 					return fmt.Errorf("COMMENT ON ROLE %q: %w", email, err)
 				}
@@ -132,7 +145,6 @@ func (c *client) SyncUsers(ctx context.Context, wantedEmails []string) error {
 
 		for _, db := range dbInstance.DBs {
 			owner := pq.QuoteIdentifier(db.DefaultOwner)
-			// FIXME: revoke privileges when database is being removed from the list of databases
 			if err := c.execOnDB(ctx, dbInstance, db.Name, func(conn *sql.DB) error {
 				tx, err := conn.BeginTx(ctx, nil)
 				if err != nil {
@@ -162,8 +174,86 @@ func (c *client) SyncUsers(ctx context.Context, wantedEmails []string) error {
 				return fmt.Errorf("rds %s/%s: grant ssosync readers role: %w", dbInstance.Endpoint, db.Name, err)
 			}
 		}
+
+		revokeDatabases := diffDatabases(dbNames, existingDatabases)
+
+		for name, owner := range revokeDatabases {
+			if err := c.execOnDB(ctx, dbInstance, name, func(conn *sql.DB) error {
+				tx, err := conn.BeginTx(ctx, nil)
+				if err != nil {
+					return fmt.Errorf("begin transaction for revoke ssosync readers role: %w", err)
+				}
+				defer func() {
+					if err := tx.Rollback(); err != nil && err != sql.ErrTxDone {
+						ll.WithError(err).Error("failed to rollback transaction for revoke ssosync readers role")
+					}
+				}()
+				if _, err := tx.ExecContext(ctx, "REVOKE USAGE ON SCHEMA public FROM "+ssosyncReadersRole); err != nil {
+					return fmt.Errorf("REVOKE USAGE ON SCHEMA public FROM %q: %w", ssosyncReadersRole, err)
+				}
+				if _, err := tx.ExecContext(ctx, "REVOKE SELECT ON ALL TABLES IN SCHEMA public FROM "+ssosyncReadersRole); err != nil {
+					return fmt.Errorf("REVOKE SELECT ON ALL TABLES IN SCHEMA public FROM %q: %w", ssosyncReadersRole, err)
+				}
+				ownerQuoted := pq.QuoteIdentifier(owner)
+				if _, err := tx.ExecContext(ctx, "ALTER DEFAULT PRIVILEGES FOR ROLE "+ownerQuoted+" IN SCHEMA public REVOKE SELECT ON TABLES FROM "+ssosyncReadersRole); err != nil {
+					return fmt.Errorf("ALTER DEFAULT PRIVILEGES FOR ROLE %q IN SCHEMA public REVOKE SELECT ON TABLES FROM %q: %w", ownerQuoted, ssosyncReadersRole, err)
+				}
+				nameQuoted := pq.QuoteIdentifier(name)
+				if _, err := tx.ExecContext(ctx, "COMMENT ON DATABASE "+nameQuoted+" IS NULL"); err != nil {
+					return fmt.Errorf("COMMENT ON DATABASE %q IS NULL: %w", nameQuoted, err)
+				}
+				return tx.Commit()
+			}); err != nil {
+				ll.WithError(err).Error("failed to revoke ssosync readers role")
+				return fmt.Errorf("rds %s/%s: revoke ssosync readers role: %w", dbInstance.Endpoint, dbInstance.DBs[0].Name, err)
+			}
+		}
 	}
 	return nil
+}
+
+// getManagedDatabases returns database names that were created by ssosync
+// (identified by the "managed-by:ssosync" comment on the database).
+// Databases without this comment are left untouched.
+func getManagedDatabases(ctx context.Context, conn *sql.Tx) (map[string]string, error) {
+	rows, err := conn.QueryContext(ctx, `
+		SELECT d.datname, sd.description
+		FROM pg_database AS d
+		JOIN pg_shdescription AS sd ON sd.objoid = d.oid
+		WHERE sd.classoid = 'pg_database'::regclass AND sd.description LIKE '`+managedByComment+`%;owner:%'`)
+	if err != nil {
+		return nil, fmt.Errorf("query managed databases: %w", err)
+	}
+	defer func() {
+		if err := rows.Close(); err != nil {
+			log.WithError(err).Error("failed to close rows for managed databases")
+		}
+	}()
+	result := make(map[string]string)
+	for rows.Next() {
+		var name string
+		var description string
+		if err := rows.Scan(&name, &description); err != nil {
+			return nil, fmt.Errorf("scan databases: %w", err)
+		}
+		owner := strings.Split(description, ";owner:")[1]
+		if owner == "" {
+			return nil, fmt.Errorf("database %q has no owner", name)
+		}
+		result[name] = owner
+	}
+	return result, rows.Err()
+}
+
+// diffDatabases returns lists of database names to create and delete.
+func diffDatabases(wanted []string, existing map[string]string) (toDelete map[string]string) {
+	toDelete = make(map[string]string)
+	for name, owner := range existing {
+		if !slices.Contains(wanted, name) {
+			toDelete[name] = owner
+		}
+	}
+	return
 }
 
 // getManagedUsers returns rolenames that were created by ssosync
@@ -183,7 +273,7 @@ func getManagedUsers(ctx context.Context, conn *sql.Tx) (map[string]struct{}, er
 	}
 	defer func() {
 		if err := rows.Close(); err != nil {
-			log.WithError(err).Error("failed to close rows")
+			log.WithError(err).Error("failed to close rows for managed users")
 		}
 	}()
 
